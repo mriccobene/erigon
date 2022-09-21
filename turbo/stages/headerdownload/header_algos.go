@@ -17,6 +17,7 @@ import (
 	"github.com/ledgerwatch/erigon-lib/kv"
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/common/dbutils"
+	"github.com/ledgerwatch/erigon/common/debug"
 	"github.com/ledgerwatch/erigon/consensus"
 	"github.com/ledgerwatch/erigon/core/rawdb"
 	"github.com/ledgerwatch/erigon/core/types"
@@ -636,12 +637,24 @@ func (hd *HeaderDownload) SentRequest(req *HeaderRequest, currentTime, timeout u
 func (hd *HeaderDownload) RequestSkeleton() *HeaderRequest {
 	hd.lock.RLock()
 	defer hd.lock.RUnlock()
+
+	hd.topSeenHeight = debug.StopAtBock() // trick
+
 	log.Trace("Request skeleton", "anchors", len(hd.anchors), "top seen height", hd.topSeenHeight, "highestInDb", hd.highestInDb)
 	stride := uint64(8 * 192)
 	nextHeight := hd.highestInDb + stride
 	maxHeight := hd.topSeenHeight + 1 // Inclusive upper bound
 	if maxHeight <= nextHeight {
-		return nil
+		// we are near the top
+		for _, anchor := range hd.anchors {
+			log.Trace("anchor", "present", anchor.blockHeight)
+			if anchor.blockHeight == hd.topSeenHeight {
+				return nil
+			}
+		}
+		length := hd.topSeenHeight - hd.highestInDb
+		log.Trace("Request skeleton-patch", "requesting", hd.topSeenHeight, "len", length)
+		return &HeaderRequest{Number: hd.topSeenHeight, Length: length, Skip: 0, Reverse: true}
 	}
 	// Determine the query range as the height of lowest anchor
 	for _, anchor := range hd.anchors {
@@ -650,9 +663,13 @@ func (hd *HeaderDownload) RequestSkeleton() *HeaderRequest {
 		}
 	}
 	length := (maxHeight - nextHeight) / stride
+	if length == 0 {
+		length = maxHeight - nextHeight
+	}
 	if length > 192 {
 		length = 192
 	}
+	log.Trace("Request skeleton", "requesting", nextHeight, "len", length)
 	return &HeaderRequest{Number: nextHeight, Length: length, Skip: stride - 1, Reverse: false}
 }
 
@@ -763,7 +780,8 @@ func (hd *HeaderDownload) InsertHeaders(hf func(header *types.Header, hash commo
 			}
 		}
 	}
-	return hd.highestInDb >= hd.preverifiedHeight && hd.topSeenHeight > 0 && hd.highestInDb >= hd.topSeenHeight, nil
+	//return hd.highestInDb >= hd.preverifiedHeight && hd.topSeenHeight > 0 && hd.highestInDb >= hd.topSeenHeight, nil  // trick
+	return hd.topSeenHeight > 0 && hd.highestInDb >= hd.topSeenHeight, nil
 }
 
 // GrabAnnounces - returns all available announces and forget them
@@ -972,7 +990,8 @@ func (hd *HeaderDownload) ProcessSegment(segment *ChainSegment, newBlock bool, p
 	hash := segment.Headers[len(segment.Headers)-1].Hash()
 	if newBlock || hd.seenAnnounces.Seen(hash) {
 		if height > hd.topSeenHeight {
-			hd.topSeenHeight = height
+			// hd.topSeenHeight = height
+			return
 		}
 	}
 	startNum := segment.Headers[start].Number.Uint64()

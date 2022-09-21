@@ -119,3 +119,22 @@ func StopBeforeStage() string {
 	stopBeforeStageFlag.Do(f)
 	return stopBeforeStage
 }
+
+var (
+	stopAtBock      uint64
+	stopAtBlockFlag sync.Once
+)
+
+func StopAtBock() uint64 {
+	stopAtBlockFlag.Do(func() {
+		v, _ := os.LookupEnv("STOP_AT_BLOCK")
+		if v != "" {
+			i, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				panic(err)
+			}
+			stopAtBock = i
+		}
+	})
+	return stopAtBock
+}
